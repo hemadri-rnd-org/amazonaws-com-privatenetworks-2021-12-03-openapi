@@ -1,0 +1,91 @@
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/aws-private-5g/mcp-server/config"
+	"github.com/aws-private-5g/mcp-server/models"
+	"github.com/mark3labs/mcp-go/mcp"
+)
+
+func DeletenetworksiteHandler(cfg *config.APIConfig) func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, ok := request.Params.Arguments.(map[string]any)
+		if !ok {
+			return mcp.NewToolResultError("Invalid arguments object"), nil
+		}
+		networkSiteArnVal, ok := args["networkSiteArn"]
+		if !ok {
+			return mcp.NewToolResultError("Missing required path parameter: networkSiteArn"), nil
+		}
+		networkSiteArn, ok := networkSiteArnVal.(string)
+		if !ok {
+			return mcp.NewToolResultError("Invalid path parameter: networkSiteArn"), nil
+		}
+		queryParams := make([]string, 0)
+		if val, ok := args["clientToken"]; ok {
+			queryParams = append(queryParams, fmt.Sprintf("clientToken=%v", val))
+		}
+		queryString := ""
+		if len(queryParams) > 0 {
+			queryString = "?" + strings.Join(queryParams, "&")
+		}
+		url := fmt.Sprintf("%s/v1/network-sites/%s%s", cfg.BaseURL, networkSiteArn, queryString)
+		req, err := http.NewRequest("DELETE", url, nil)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("Failed to create request", err), nil
+		}
+		// Set authentication based on auth type
+		// Handle multiple authentication parameters
+		if cfg.BearerToken != "" {
+			req.Header.Set("X-Amz-Security-Token", cfg.BearerToken)
+		}
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("Request failed", err), nil
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("Failed to read response body", err), nil
+		}
+
+		if resp.StatusCode >= 400 {
+			return mcp.NewToolResultError(fmt.Sprintf("API error: %s", body)), nil
+		}
+		// Use properly typed response
+		var result models.DeleteNetworkSiteResponse
+		if err := json.Unmarshal(body, &result); err != nil {
+			// Fallback to raw text if unmarshaling fails
+			return mcp.NewToolResultText(string(body)), nil
+		}
+
+		prettyJSON, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("Failed to format JSON", err), nil
+		}
+
+		return mcp.NewToolResultText(string(prettyJSON)), nil
+	}
+}
+
+func CreateDeletenetworksiteTool(cfg *config.APIConfig) models.Tool {
+	tool := mcp.NewTool("delete_v1_network-sites_networkSiteArn",
+		mcp.WithDescription("Deletes the specified network site. Return the hardware after you delete the network site. You are responsible for minimum charges. For more information, see <a href="https://docs.aws.amazon.com/private-networks/latest/userguide/hardware-maintenance.html">Hardware returns</a> in the <i>Amazon Web Services Private 5G User Guide</i>. "),
+		mcp.WithString("clientToken", mcp.Description("Unique, case-sensitive identifier that you provide to ensure the idempotency of the request. For more information, see <a href=\"https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Run_Instance_Idempotency.html\">How to ensure idempotency</a>.")),
+		mcp.WithString("networkSiteArn", mcp.Required(), mcp.Description("The Amazon Resource Name (ARN) of the network site.")),
+	)
+
+	return models.Tool{
+		Definition: tool,
+		Handler:    DeletenetworksiteHandler(cfg),
+	}
+}
